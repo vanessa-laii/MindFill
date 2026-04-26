@@ -1,5 +1,7 @@
 # MindFill
 
+Deployed on https://mind-fill.vercel.app/
+
 A therapeutic digital coloring app designed for cognitive wellness and creative joy. Users color outline templates with a brush, eraser, or flood fill, receive optional AI-powered encouragement, and track session analytics over time.
 
 ## Features
@@ -40,11 +42,3 @@ components/   # Canvas, ColorPicker, modals, TrendChart, Toast
 lib/          # floodFill algorithm, gallery client helpers, Supabase client
 ```
 
-## Getting Started
-
-```bash
-npm install
-npm run dev
-```
-
-Open [http://localhost:3000](http://localhost:3000).
