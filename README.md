@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# MindFill
+
+A therapeutic digital coloring app designed for cognitive wellness and creative joy. Users color outline templates with a brush, eraser, or flood fill, receive optional AI-powered encouragement, and track session analytics over time.
+
+## Features
+
+- **Fun & Care modes** — casual coloring or a guided session with movement telemetry and real-time Gemini AI encouragement
+- **Template engine** — upload any photo and convert it to a line-art coloring template via edge detection
+- **Session analytics** — post-session AI analysis of metrics (activity, neglect ratio, quadrant coverage)
+- **Gallery** — save, browse, and delete completed artwork stored in the cloud
+- **Overview** — trend charts and stats across all sessions
+
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Framework | Next.js 16 (App Router) |
+| UI | React 19, Tailwind CSS 4, Lucide React |
+| AI | Google Gemini (`@google/generative-ai`) |
+| Database / Storage | Supabase |
+| Image Processing | Sharp, image-js |
+| Language | TypeScript |
+
+## Architecture
+
+```
+app/
+├── page.tsx                  # Home — coloring canvas (fun / care mode)
+├── gallery/page.tsx          # Saved artwork gallery
+├── gallery/overview/page.tsx # Session stats & trend charts
+└── api/
+    ├── gemini/analyze/       # AI analysis of session metrics
+    ├── gemini/encouragement/ # Real-time AI encouragement (care mode)
+    ├── sessions/             # Persist & aggregate session data
+    ├── gallery/              # CRUD for saved images
+    ├── upload-template/      # Accept user photo uploads
+    └── process-template/     # Edge-detect → coloring template
+
+components/   # Canvas, ColorPicker, modals, TrendChart, Toast
+lib/          # floodFill algorithm, gallery client helpers, Supabase client
+```
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Open [http://localhost:3000](http://localhost:3000).
