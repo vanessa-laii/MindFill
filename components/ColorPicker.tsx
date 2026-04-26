@@ -1,6 +1,6 @@
 'use client';
 
-import { Check } from 'lucide-react';
+import { Check, X } from 'lucide-react';
 
 interface ColorPickerProps {
   isOpen: boolean;
@@ -9,66 +9,133 @@ interface ColorPickerProps {
   onColorSelect: (color: string) => void;
 }
 
-// Cheerful, minimalistic color palette
-const PRESET_COLORS = [
-  '#F5E6D3', // Creamy beige
-  '#8B7D6B', // Taupe
-  '#A8C09A', // Sage green
-  '#D4E4F0', // Pale blue
-  '#8FA8C7', // Slate blue
-  '#F4C2A1', // Peach
-  '#D4A5A5', // Rose
-  '#C17767', // Terracotta
-  '#6B5D5D', // Dark taupe (for darker strokes)
-  '#E8F4F8', // Very light blue
-  '#FFFFFF', // White
-  '#000000', // Black (for contrast)
+const PALETTE = [
+  // Warm neutrals
+  { hex: '#FAF8F5', name: 'Cream' },
+  { hex: '#EAE0D4', name: 'Sand' },
+  { hex: '#C4B4A4', name: 'Taupe' },
+  { hex: '#8C7A6A', name: 'Umber' },
+  // Sage greens
+  { hex: '#B8D8BC', name: 'Mint' },
+  { hex: '#7BAA88', name: 'Sage' },
+  { hex: '#4A8560', name: 'Forest' },
+  { hex: '#2D5A3D', name: 'Deep Forest' },
+  // Sky blues
+  { hex: '#B5D4E5', name: 'Mist' },
+  { hex: '#6BA6C0', name: 'Sky' },
+  { hex: '#3D7EA6', name: 'Denim' },
+  { hex: '#1E4D6B', name: 'Navy' },
+  // Warm tones
+  { hex: '#F4D4B8', name: 'Apricot' },
+  { hex: '#E09E78', name: 'Peach' },
+  { hex: '#C17040', name: 'Amber' },
+  { hex: '#AF5E47', name: 'Terracotta' },
+  // Rose & plum
+  { hex: '#F0C4C4', name: 'Blush' },
+  { hex: '#C88A8A', name: 'Rose' },
+  { hex: '#9E6060', name: 'Dusty Rose' },
+  { hex: '#7A4848', name: 'Burgundy' },
+  // Basics
+  { hex: '#FFFFFF', name: 'White' },
+  { hex: '#D0D0D0', name: 'Silver' },
+  { hex: '#606060', name: 'Slate' },
+  { hex: '#1A1410', name: 'Ink' },
 ];
+
+function isLightColor(hex: string): boolean {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return (r * 299 + g * 587 + b * 114) / 1000 > 180;
+}
 
 export default function ColorPicker({ isOpen, onClose, selectedColor, onColorSelect }: ColorPickerProps) {
   if (!isOpen) return null;
 
   return (
-    <div 
-      className="fixed inset-0 flex items-center justify-center z-50 backdrop-blur-sm" 
-      style={{ backgroundColor: 'rgba(139, 125, 107, 0.6)' }}
+    <div
+      className="fixed inset-0 flex items-center justify-center z-50"
+      style={{ background: 'rgba(35,27,19,0.5)', backdropFilter: 'blur(8px)' }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      <div 
-        className="rounded-3xl p-10 max-w-2xl w-full mx-4 shadow-2xl" 
-        style={{ backgroundColor: '#FFFFFF', border: '4px solid #D4E4F0' }}
+      <div
+        className="relative w-full max-w-md mx-4 rounded-3xl p-6 shadow-2xl"
+        style={{
+          background: 'var(--surface)',
+          border: '1px solid var(--border)',
+        }}
+        onClick={(e) => e.stopPropagation()}
       >
-        <h2 className="text-4xl font-bold mb-8 text-center" style={{ color: '#FFFFFF' }}>
-          Choose a Color
-        </h2>
-        
-        <div className="grid grid-cols-4 gap-6 mb-8">
-          {PRESET_COLORS.map((color) => {
-            const isSelected = selectedColor === color;
-            const isLight = color === '#FFFFFF' || color === '#F5E6D3' || color === '#D4E4F0' || color === '#E8F4F8';
-            
+        {/* Header */}
+        <div className="flex items-center justify-between mb-5">
+          <div>
+            <h2
+              className="text-xl font-semibold"
+              style={{ fontFamily: 'var(--font-display)', color: 'var(--ink)' }}
+            >
+              Choose a Color
+            </h2>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--muted)' }}>
+              {PALETTE.find(c => c.hex.toLowerCase() === selectedColor.toLowerCase())?.name ?? 'Custom'}
+            </p>
+          </div>
+
+          {/* Selected color preview */}
+          <div className="flex items-center gap-3">
+            <div
+              className="w-10 h-10 rounded-xl shadow-sm"
+              style={{
+                background: selectedColor,
+                border: '2px solid var(--cream-border)',
+              }}
+            />
+            <button
+              onClick={onClose}
+              className="w-9 h-9 flex items-center justify-center rounded-xl transition-all hover:opacity-70 active:scale-95"
+              style={{
+                background: 'var(--cream-deep)',
+                color: 'var(--muted)',
+                minHeight: 'unset',
+              }}
+              aria-label="Close"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+
+        {/* Color Grid */}
+        <div className="grid grid-cols-6 gap-2.5">
+          {PALETTE.map(({ hex, name }) => {
+            const isSelected = selectedColor.toLowerCase() === hex.toLowerCase();
+            const light = isLightColor(hex);
+
             return (
               <button
-                key={color}
-                onClick={() => {
-                  onColorSelect(color);
-                  onClose();
-                }}
-                className="transition-all hover:scale-110 active:scale-95"
-                style={{ 
-                  width: '120px',
-                  height: '120px',
+                key={hex}
+                onClick={() => { onColorSelect(hex); onClose(); }}
+                title={name}
+                className="relative transition-all hover:scale-110 active:scale-95"
+                style={{
+                  width: '100%',
+                  aspectRatio: '1',
                   borderRadius: '50%',
-                  backgroundColor: color,
-                  border: isSelected ? '6px solid #C17767' : '4px solid #D4E4F0',
-                  boxShadow: isSelected ? '0 8px 16px rgba(193, 119, 103, 0.4)' : '0 4px 8px rgba(0, 0, 0, 0.1)'
+                  background: hex,
+                  border: isSelected
+                    ? `3px solid ${light ? '#6B5D5D' : '#FFFFFF'}`
+                    : '2px solid rgba(0,0,0,0.08)',
+                  boxShadow: isSelected
+                    ? `0 0 0 2px ${hex}, 0 4px 12px rgba(0,0,0,0.15)`
+                    : '0 1px 3px rgba(0,0,0,0.1)',
+                  minHeight: 'unset',
                 }}
-                aria-label={`Select color ${color}`}
+                aria-label={`Select ${name}`}
               >
                 {isSelected && (
-                  <div className="flex items-center justify-center h-full">
-                    <Check 
-                      className="w-16 h-16 drop-shadow-lg" 
-                      style={{ color: isLight ? '#6B5D5D' : '#FFFFFF' }}
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Check
+                      className="w-4 h-4 drop-shadow"
+                      style={{ color: light ? '#4A3C30' : '#FFFFFF' }}
                     />
                   </div>
                 )}
@@ -77,16 +144,17 @@ export default function ColorPicker({ isOpen, onClose, selectedColor, onColorSel
           })}
         </div>
 
+        {/* Done button */}
         <button
           onClick={onClose}
-          className="w-full h-24 rounded-3xl text-3xl font-bold transition-all shadow-md hover:shadow-lg active:scale-95"
-          style={{ 
-            backgroundColor: '#F4C2A1',
-            color: '#6B5D5D',
-            border: '3px solid #D4A5A5'
+          className="w-full mt-5 py-3 rounded-2xl font-semibold text-white transition-all hover:opacity-90 active:scale-95"
+          style={{
+            background: 'var(--terracotta)',
+            fontSize: '14px',
+            minHeight: '48px',
           }}
         >
-          Close
+          Done
         </button>
       </div>
     </div>

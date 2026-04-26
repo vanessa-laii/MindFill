@@ -1,31 +1,33 @@
 'use client';
 
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { Palette, Eraser, Save, Upload, Droplet } from 'lucide-react';
+import { Palette, Eraser, Save, Upload, Droplet, Images, Undo2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
-import Canvas from '@/components/Canvas/Canvas';
+import Canvas, { type CanvasHandle } from '@/components/Canvas/Canvas';
 import ColorPicker from '@/components/ColorPicker';
 import SessionSummaryModal from '@/components/SessionSummaryModal';
 import SessionReportModal from '@/components/SessionReportModal';
+import Toast, { type ToastMessage, type ToastType } from '@/components/Toast';
+import LoadingScreen from '@/components/LoadingScreen';
 import { saveToGallery } from '@/lib/gallery';
 
 export default function HomePage() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const canvasRef = useRef<CanvasHandle>(null);
   const [selectedColor, setSelectedColor] = useState('#D28378');
   const [brushSize, setBrushSize] = useState(20);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [isEraser, setIsEraser] = useState(false);
-  const [isFloodFill, setIsFloodFill] = useState(false); // Flood fill toggle for Fun mode
+  const [isFloodFill, setIsFloodFill] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [baseImage, setBaseImage] = useState<string | undefined>(undefined); // Outline/base image data URL
-  const [mode, setMode] = useState<'fun' | 'care'>('fun'); // Mode: 'fun' for basic coloring, 'care' for dementia patients
+  const [baseImage, setBaseImage] = useState<string | undefined>(undefined);
+  const [mode, setMode] = useState<'fun' | 'care'>('fun');
   const [showSessionSummary, setShowSessionSummary] = useState(false);
   const [showSessionReport, setShowSessionReport] = useState(false);
   const [sessionStartTime, setSessionStartTime] = useState<Date | null>(null);
   const [sessionAnalysis, setSessionAnalysis] = useState<string | null>(null);
-  
-  // Phase 1: Session tracking for analytics
+
   const [sessionEvents, setSessionEvents] = useState<Array<{
     type: 'fill' | 'draw' | 'erase' | 'move' | 'nudge';
     x?: number;
@@ -35,8 +37,20 @@ export default function HomePage() {
   const [colorsUsedSet, setColorsUsedSet] = useState<Set<string>>(new Set());
   const nudgeTimerRef = useRef<NodeJS.Timeout | null>(null);
   const speakTextRef = useRef<((text: string) => void) | null>(null);
-  
-  // Phase 2: Calculated metrics
+
+  const [showLoader, setShowLoader] = useState(true);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const toastIdRef = useRef(0);
+
+  const showToast = useCallback((message: string, type: ToastType = 'info') => {
+    const id = ++toastIdRef.current;
+    setToasts(prev => [...prev, { id, message, type }]);
+  }, []);
+
+  const dismissToast = useCallback((id: number) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
   const [sessionMetrics, setSessionMetrics] = useState<{
     neglectRatio: number | null;
     quadrantActivity: {
@@ -50,51 +64,31 @@ export default function HomePage() {
     nudgeCount: number;
   } | null>(null);
 
-  // Function to speak text using Web Speech API
   const speakText = useCallback((text: string) => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      console.warn('Speech synthesis not supported in this browser');
-      return;
-    }
-
-    // Cancel any ongoing speech
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
-
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 0.9; // Slightly slower for clarity
+    utterance.rate = 0.9;
     utterance.pitch = 1.0;
     utterance.volume = 1.0;
-    
-    // Try to use a friendly voice if available
     const voices = window.speechSynthesis.getVoices();
-    const preferredVoice = voices.find(voice => 
-      voice.name.includes('Google') || 
+    const preferredVoice = voices.find(voice =>
+      voice.name.includes('Google') ||
       voice.name.includes('Microsoft') ||
       voice.lang.startsWith('en')
     );
-    if (preferredVoice) {
-      utterance.voice = preferredVoice;
-    }
-
-    utterance.onerror = (error) => {
-      console.error('Speech synthesis error:', error);
-    };
-
+    if (preferredVoice) utterance.voice = preferredVoice;
+    utterance.onerror = (error) => console.error('Speech synthesis error:', error);
     window.speechSynthesis.speak(utterance);
   }, []);
 
-  // Store speakText in ref so it can be used in useEffect without dependency issues
   useEffect(() => {
     speakTextRef.current = speakText;
   }, [speakText]);
 
-  // Load voices when component mounts (some browsers need this)
   useEffect(() => {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      // Load voices (some browsers need this)
-      const loadVoices = () => {
-        window.speechSynthesis.getVoices();
-      };
+      const loadVoices = () => { window.speechSynthesis.getVoices(); };
       loadVoices();
       if (window.speechSynthesis.onvoiceschanged !== undefined) {
         window.speechSynthesis.onvoiceschanged = loadVoices;
@@ -102,356 +96,174 @@ export default function HomePage() {
     }
   }, []);
 
-  // Initialize session when photo is loaded (when baseImage changes) - ONLY IN CARE MODE
   useEffect(() => {
     if (baseImage && mode === 'care') {
-      // Start new session when photo is loaded in Care mode
       const startTime = new Date();
       setSessionStartTime(startTime);
       setSessionEvents([]);
       setColorsUsedSet(new Set());
-      
-      // Clear any existing nudge timer
-      if (nudgeTimerRef.current) {
-        clearTimeout(nudgeTimerRef.current);
-        nudgeTimerRef.current = null;
-      }
-      
-      // Start 60-second nudge timer
+      if (nudgeTimerRef.current) { clearTimeout(nudgeTimerRef.current); nudgeTimerRef.current = null; }
       nudgeTimerRef.current = setTimeout(() => {
-        // Nudge timer fired - log nudge event
-        const nudgeEvent = {
-          type: 'nudge' as const,
-          timestamp: Date.now(),
-        };
-        setSessionEvents(prev => [...prev, nudgeEvent]);
-        
-        // Call Gemini "Encouragement" API and speak it
-        fetch('/api/gemini/encouragement', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        })
+        setSessionEvents(prev => [...prev, { type: 'nudge' as const, timestamp: Date.now() }]);
+        fetch('/api/gemini/encouragement', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
           .then(res => res.json())
-          .then(data => {
-            if (data.success && data.message) {
-              console.log('Encouragement:', data.message);
-              // Speak the encouragement message
-              if (speakTextRef.current) {
-                speakTextRef.current(data.message);
-              }
-            }
-          })
+          .then(data => { if (data.success && data.message && speakTextRef.current) speakTextRef.current(data.message); })
           .catch(err => console.error('Error calling encouragement API:', err));
-        
-        // Reset timer for next nudge
         nudgeTimerRef.current = setTimeout(() => {
-          const nextNudgeEvent = {
-            type: 'nudge' as const,
-            timestamp: Date.now(),
-          };
-          setSessionEvents(prev => [...prev, nextNudgeEvent]);
-          // Call Gemini "Encouragement" API for next nudge
-          fetch('/api/gemini/encouragement', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-          })
+          setSessionEvents(prev => [...prev, { type: 'nudge' as const, timestamp: Date.now() }]);
+          fetch('/api/gemini/encouragement', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
             .then(res => res.json())
-            .then(data => {
-              if (data.success && data.message) {
-                console.log('Encouragement:', data.message);
-                // Speak the encouragement message
-                speakText(data.message);
-              }
-            })
+            .then(data => { if (data.success && data.message) speakText(data.message); })
             .catch(err => console.error('Error calling encouragement API:', err));
         }, 60000);
       }, 60000);
     } else if (mode === 'fun') {
-      // Clear session tracking when switching to Fun mode
       setSessionEvents([]);
       setColorsUsedSet(new Set());
-      if (nudgeTimerRef.current) {
-        clearTimeout(nudgeTimerRef.current);
-        nudgeTimerRef.current = null;
-      }
+      if (nudgeTimerRef.current) { clearTimeout(nudgeTimerRef.current); nudgeTimerRef.current = null; }
     }
-    
-    // Cleanup timer on unmount or when baseImage/mode changes
-    return () => {
-      if (nudgeTimerRef.current) {
-        clearTimeout(nudgeTimerRef.current);
-        nudgeTimerRef.current = null;
-      }
-    };
+    return () => { if (nudgeTimerRef.current) { clearTimeout(nudgeTimerRef.current); nudgeTimerRef.current = null; } };
   }, [baseImage, mode]);
 
-  // Handle canvas events from Canvas component - ONLY IN CARE MODE
   const handleCanvasEvent = useCallback((event: {
     type: 'fill' | 'draw' | 'erase' | 'move';
     x: number;
     y: number;
     timestamp: number;
   }) => {
-    // Only track events in Care mode
     if (mode !== 'care') return;
-    
-    // Add event to session events array
     setSessionEvents(prev => [...prev, event]);
-    
-    // Track colors used (for fill and draw events, not erase)
     if (event.type === 'fill' || event.type === 'draw') {
-      setColorsUsedSet(prev => {
-        const newSet = new Set(prev);
-        newSet.add(selectedColor);
-        return newSet;
-      });
+      setColorsUsedSet(prev => { const s = new Set(prev); s.add(selectedColor); return s; });
     }
-    
-    // Reset nudge timer on click events (fill, draw, erase)
     if (event.type === 'fill' || event.type === 'draw' || event.type === 'erase') {
-      if (nudgeTimerRef.current) {
-        clearTimeout(nudgeTimerRef.current);
-      }
-      
-      // Start new 60-second timer
+      if (nudgeTimerRef.current) clearTimeout(nudgeTimerRef.current);
       nudgeTimerRef.current = setTimeout(() => {
-        const nudgeEvent = {
-          type: 'nudge' as const,
-          timestamp: Date.now(),
-        };
-        setSessionEvents(prev => [...prev, nudgeEvent]);
-        
-        // Call Gemini "Encouragement" API and speak it
-        fetch('/api/gemini/encouragement', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        })
+        setSessionEvents(prev => [...prev, { type: 'nudge' as const, timestamp: Date.now() }]);
+        fetch('/api/gemini/encouragement', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
           .then(res => res.json())
-          .then(data => {
-            if (data.success && data.message) {
-              console.log('Encouragement:', data.message);
-              // Speak the encouragement message
-              if (speakTextRef.current) {
-                speakTextRef.current(data.message);
-              }
-            }
-          })
+          .then(data => { if (data.success && data.message && speakTextRef.current) speakTextRef.current(data.message); })
           .catch(err => console.error('Error calling encouragement API:', err));
-        
-        // Reset timer for next nudge
         nudgeTimerRef.current = setTimeout(() => {
-          const nextNudgeEvent = {
-            type: 'nudge' as const,
-            timestamp: Date.now(),
-          };
-          setSessionEvents(prev => [...prev, nextNudgeEvent]);
-          // Call Gemini "Encouragement" API for next nudge
-          fetch('/api/gemini/encouragement', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-          })
+          setSessionEvents(prev => [...prev, { type: 'nudge' as const, timestamp: Date.now() }]);
+          fetch('/api/gemini/encouragement', { method: 'POST', headers: { 'Content-Type': 'application/json' } })
             .then(res => res.json())
-            .then(data => {
-              if (data.success && data.message) {
-                console.log('Encouragement:', data.message);
-                // Speak the encouragement message
-                speakText(data.message);
-              }
-            })
+            .then(data => { if (data.success && data.message) speakText(data.message); })
             .catch(err => console.error('Error calling encouragement API:', err));
         }, 60000);
       }, 60000);
     }
   }, [mode, selectedColor]);
 
-  // Calculate session duration
   const getSessionDuration = (): string => {
     if (!sessionStartTime) return '00:00';
-    const now = new Date();
-    const diffMs = now.getTime() - sessionStartTime.getTime();
+    const diffMs = new Date().getTime() - sessionStartTime.getTime();
     const diffMins = Math.floor(diffMs / 60000);
     const diffSecs = Math.floor((diffMs % 60000) / 1000);
     return `${diffMins.toString().padStart(2, '0')}:${diffSecs.toString().padStart(2, '0')}`;
   };
 
-  // Get canvas dimensions
   const getCanvasDimensions = (): string => {
-    if (typeof document === 'undefined') return '--x--'; // SSR guard
+    if (typeof document === 'undefined') return '--x--';
     const canvas = document.querySelector('canvas') as HTMLCanvasElement;
-    if (canvas && canvas.width > 0 && canvas.height > 0) {
-      return `${canvas.width}x${canvas.height}`;
-    }
+    if (canvas && canvas.width > 0 && canvas.height > 0) return `${canvas.width}x${canvas.height}`;
     return '--x--';
   };
 
   const handleSave = async () => {
-    // Show session summary modal only in Care mode
     if (mode === 'care') {
       setShowSessionSummary(true);
     } else {
-      // In Fun mode, save directly to gallery
       const canvas = document.querySelector('canvas') as HTMLCanvasElement;
       if (canvas) {
         try {
           const imageId = await saveToGallery(canvas);
-          if (imageId) {
-            router.push('/gallery');
-          } else {
-            alert('Failed to save drawing. Please try again.');
-          }
+          if (imageId) { router.push('/gallery'); }
+          else showToast('Failed to save drawing. Please try again.', 'error');
         } catch (error) {
           console.error('Error saving:', error);
-          alert('Failed to save drawing. Please try again.');
+          showToast('Failed to save drawing. Please try again.', 'error');
         }
       }
     }
   };
 
-  // Phase 2: Calculate session metrics
   const calculateSessionMetrics = useCallback(() => {
-    if (!sessionStartTime || sessionEvents.length === 0) {
-      return null;
-    }
-
+    if (!sessionStartTime || sessionEvents.length === 0) return null;
     const canvas = document.querySelector('canvas') as HTMLCanvasElement;
     if (!canvas) return null;
-
     const endTime = new Date();
-    const startTime = sessionStartTime;
-    
-    // 1. 4-Quadrant Spatial Neglect Analysis
     const midX = canvas.width / 2;
     const midY = canvas.height / 2;
-    const clickEvents = sessionEvents.filter(e => 
-      e.type === 'fill' || e.type === 'draw' || e.type === 'erase'
-    );
-    
-    // Count clicks in each quadrant
-    let topLeft = 0;
-    let topRight = 0;
-    let bottomLeft = 0;
-    let bottomRight = 0;
-    
+    const clickEvents = sessionEvents.filter(e => e.type === 'fill' || e.type === 'draw' || e.type === 'erase');
+    let topLeft = 0, topRight = 0, bottomLeft = 0, bottomRight = 0;
     clickEvents.forEach(e => {
       if (e.x !== undefined && e.y !== undefined) {
-        if (e.x < midX && e.y < midY) {
-          topLeft++;
-        } else if (e.x >= midX && e.y < midY) {
-          topRight++;
-        } else if (e.x < midX && e.y >= midY) {
-          bottomLeft++;
-        } else {
-          bottomRight++;
-        }
+        if (e.x < midX && e.y < midY) topLeft++;
+        else if (e.x >= midX && e.y < midY) topRight++;
+        else if (e.x < midX && e.y >= midY) bottomLeft++;
+        else bottomRight++;
       }
     });
-    
     const totalClicks = topLeft + topRight + bottomLeft + bottomRight;
-    
-    // Calculate percentages for each quadrant
-    const quadrantActivity = totalClicks > 0 ? {
-      topLeft: (topLeft / totalClicks) * 100,
-      topRight: (topRight / totalClicks) * 100,
-      bottomLeft: (bottomLeft / totalClicks) * 100,
-      bottomRight: (bottomRight / totalClicks) * 100,
-    } : {
-      topLeft: 25,
-      topRight: 25,
-      bottomLeft: 25,
-      bottomRight: 25,
-    };
-    
-    // Calculate horizontal neglect ratio (for backward compatibility)
+    const quadrantActivity = totalClicks > 0
+      ? { topLeft: (topLeft / totalClicks) * 100, topRight: (topRight / totalClicks) * 100, bottomLeft: (bottomLeft / totalClicks) * 100, bottomRight: (bottomRight / totalClicks) * 100 }
+      : { topLeft: 25, topRight: 25, bottomLeft: 25, bottomRight: 25 };
     const leftClicks = topLeft + bottomLeft;
     const neglectRatio = totalClicks > 0 ? leftClicks / totalClicks : 0.5;
-
-    // 2. Motor Stability (Jitter) Math
     const moveEvents = sessionEvents.filter(e => e.type === 'move' && e.x !== undefined && e.y !== undefined);
     let tremorScore = 0;
-    const TREMOR_THRESHOLD = 3; // pixels - tiny movements
-    
+    const TREMOR_THRESHOLD = 3;
     for (let i = 1; i < moveEvents.length; i++) {
-      const prev = moveEvents[i - 1];
-      const curr = moveEvents[i];
-      
+      const prev = moveEvents[i - 1], curr = moveEvents[i];
       if (prev.x !== undefined && prev.y !== undefined && curr.x !== undefined && curr.y !== undefined) {
-        const distance = Math.sqrt(
-          Math.pow(curr.x - prev.x, 2) + Math.pow(curr.y - prev.y, 2)
-        );
-        
-        // If distance is tiny (micro-movement), increment tremor score
-        if (distance < TREMOR_THRESHOLD && distance > 0) {
-          tremorScore += 1;
-        }
+        const distance = Math.sqrt(Math.pow(curr.x - prev.x, 2) + Math.pow(curr.y - prev.y, 2));
+        if (distance < TREMOR_THRESHOLD && distance > 0) tremorScore += 1;
       }
     }
-    
-    // Normalize tremor score (divide by number of move events for comparability)
     const normalizedTremorScore = moveEvents.length > 0 ? tremorScore / moveEvents.length : 0;
-
-    // 3. Completion Velocity
-    const totalTime = (endTime.getTime() - startTime.getTime()) / 1000; // in seconds
-
-    // Count nudges
+    const totalTime = (endTime.getTime() - sessionStartTime.getTime()) / 1000;
     const nudgeCount = sessionEvents.filter(e => e.type === 'nudge').length;
-
-    return {
-      neglectRatio,
-      quadrantActivity,
-      tremorScore: normalizedTremorScore,
-      totalTime,
-      nudgeCount,
-    };
+    return { neglectRatio, quadrantActivity, tremorScore: normalizedTremorScore, totalTime, nudgeCount };
   }, [sessionEvents, sessionStartTime]);
 
   const handleSessionSummaryNext = async () => {
-    // Phase 2: Calculate metrics before saving
     const metrics = calculateSessionMetrics();
-    
     if (metrics) {
       setSessionMetrics(metrics);
-      console.log('Session Metrics:', metrics);
-      
-      // Phase 3: Call Gemini API for analysis
       try {
         const response = await fetch('/api/gemini/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            totalTime: metrics.totalTime,
             neglectRatio: metrics.neglectRatio,
             quadrantActivity: metrics.quadrantActivity,
             tremorScore: metrics.tremorScore,
             nudgeCount: metrics.nudgeCount,
-            context: 'a coloring page', // TODO: Could be more specific based on uploaded image
+            context: 'a coloring page',
           }),
         });
-
         const data = await response.json();
-        
-        if (data.success && data.analysis) {
+        if (response.ok && data.success && data.analysis) {
           setSessionAnalysis(data.analysis);
-          // Close session summary and show report modal
           setShowSessionSummary(false);
           setShowSessionReport(true);
-          return; // Don't save yet - wait for user to close report modal
+          return;
         } else {
-          console.error('Failed to get analysis:', data.error);
-          // Show user-friendly message if rate limited
-          if (data.error?.includes('429') || data.error?.includes('quota')) {
-            alert('Analysis temporarily unavailable due to API rate limits. Your drawing will still be saved to the gallery.');
+          const errorMsg = data.error || 'Unknown error';
+          if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('rate')) {
+            showToast('Analysis temporarily unavailable — your drawing will still be saved.', 'info');
           } else {
-            alert('Unable to generate analysis at this time. Your drawing will still be saved to the gallery.');
+            showToast(`Unable to generate analysis: ${errorMsg}`, 'error');
           }
-          // Continue with save even if analysis fails
         }
       } catch (error) {
         console.error('Error calling Gemini API:', error);
-        // Continue with save even if API call fails
+        showToast('Error generating analysis — your drawing will still be saved.', 'error');
       }
+    } else {
+      showToast('No session data yet — try coloring the image before saving.', 'info');
     }
-    
-    // If no metrics or analysis failed, proceed with save
     await saveImageToGallery();
   };
 
@@ -460,9 +272,8 @@ export default function HomePage() {
     if (canvas) {
       try {
         const imageId = await saveToGallery(canvas);
-        if (imageId) {
-          // If in Care mode and we have session metrics, save session data
-          if (mode === 'care' && sessionMetrics && sessionAnalysis) {
+          if (imageId) {
+            if (mode === 'care' && sessionMetrics && sessionAnalysis) {
             try {
               await fetch('/api/sessions', {
                 method: 'POST',
@@ -474,48 +285,37 @@ export default function HomePage() {
                   quadrantActivity: sessionMetrics.quadrantActivity,
                   tremorIndex: sessionMetrics.tremorScore,
                   aiInsight: sessionAnalysis,
-                  userId: null, // TODO: Get from auth session
+                  userId: null,
                 }),
               });
-              console.log('Session data saved to database');
             } catch (error) {
               console.error('Error saving session data:', error);
-              // Don't block navigation if session save fails
             }
           }
-          
-          // Reset session start time for next session
           setSessionStartTime(new Date());
           router.push('/gallery');
         } else {
-          alert('Failed to save drawing. Please try again.');
+          showToast('Failed to save drawing. Please try again.', 'error');
         }
       } catch (error) {
         console.error('Error saving:', error);
-        alert('Failed to save drawing. Please try again.');
+        showToast('Failed to save drawing. Please try again.', 'error');
       }
     }
   };
 
   const handleReportClose = async () => {
     setShowSessionReport(false);
-    // Save image after user closes report
     await saveImageToGallery();
   };
 
   const handleDownloadReport = async () => {
     const canvas = document.querySelector('canvas') as HTMLCanvasElement;
     if (!canvas || !sessionAnalysis) return;
-
     try {
-      // Convert canvas to image
       const imageDataUrl = canvas.toDataURL('image/png');
-      
-      // Create a text blob for the report
       const reportText = `Session Analysis Report\n\n${sessionAnalysis}\n\nGenerated on ${new Date().toLocaleString()}`;
       const textBlob = new Blob([reportText], { type: 'text/plain' });
-      
-      // Download text file
       const textUrl = URL.createObjectURL(textBlob);
       const textLink = document.createElement('a');
       textLink.href = textUrl;
@@ -524,155 +324,248 @@ export default function HomePage() {
       textLink.click();
       document.body.removeChild(textLink);
       URL.revokeObjectURL(textUrl);
-      
-      // Download image
       const imageLink = document.createElement('a');
       imageLink.href = imageDataUrl;
       imageLink.download = `colored-image-${Date.now()}.png`;
       document.body.appendChild(imageLink);
       imageLink.click();
       document.body.removeChild(imageLink);
-      
-      // Small delay between downloads
       await new Promise(resolve => setTimeout(resolve, 100));
     } catch (error) {
       console.error('Error downloading report:', error);
-      alert('Failed to download report. Please try again.');
+      showToast('Failed to download report. Please try again.', 'error');
     }
   };
 
-  const handleUploadClick = () => {
-    fileInputRef.current?.click();
-  };
+  const handleUploadClick = () => { fileInputRef.current?.click(); };
 
   const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
-
-    // Validate file type client-side
     const allowedTypes = ['image/png', 'image/jpeg', 'image/jpg'];
-    if (!allowedTypes.includes(file.type)) {
-      alert('Invalid file format. Please upload PNG, JPG, or JPEG files only.');
-      return;
-    }
-
-    // Validate file size (max 10MB)
-    const maxSize = 10 * 1024 * 1024; // 10MB
-    if (file.size > maxSize) {
-      alert('File size too large. Maximum size is 10MB.');
-      return;
-    }
-
+    if (!allowedTypes.includes(file.type)) { showToast('Invalid file format. Please upload PNG, JPG, or JPEG only.', 'error'); return; }
+    const maxSize = 10 * 1024 * 1024;
+    if (file.size > maxSize) { showToast('File too large — maximum size is 10 MB.', 'error'); return; }
     setIsUploading(true);
-    
     try {
       const formData = new FormData();
       formData.append('file', file);
-
-      const response = await fetch('/api/upload-template', {
-        method: 'POST',
-        body: formData,
-      });
-
+      const response = await fetch('/api/upload-template', { method: 'POST', body: formData });
       if (!response.ok) {
         let errorMessage = 'Failed to upload image';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorData.details || errorMessage;
-        } catch {
-          errorMessage = `Server error: ${response.status} ${response.statusText}`;
-        }
+        try { const errorData = await response.json(); errorMessage = errorData.error || errorData.details || errorMessage; }
+        catch { errorMessage = `Server error: ${response.status} ${response.statusText}`; }
         throw new Error(errorMessage);
       }
-
       const result = await response.json();
-
-      // Step 2: Process the uploaded image into an outline
       const processResponse = await fetch('/api/process-template', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          imageUrl: result.url,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageUrl: result.url }),
       });
-
       if (!processResponse.ok) {
         const processError = await processResponse.json();
         throw new Error(processError.error || 'Failed to process image into outline');
       }
-
       const processResult = await processResponse.json();
-      
-      // Step 3: Load the processed outline onto the canvas
       if (processResult.dataUrl) {
-        console.log('Setting baseImage, dataUrl length:', processResult.dataUrl.length);
-        console.log('DataUrl preview:', processResult.dataUrl.substring(0, 100));
         setBaseImage(processResult.dataUrl);
-        // Small delay to ensure state is updated before alert
-        setTimeout(() => {
-          alert('Image uploaded and processed! The outline is now on your canvas. Start coloring!');
-        }, 100);
+        showToast('Image processed! Your coloring outline is ready.', 'success');
       } else {
-        console.error('No dataUrl in processResult:', processResult);
         throw new Error('Failed to get processed outline');
       }
-      
     } catch (error) {
       console.error('Error uploading/processing:', error);
-      alert(`Failed to process image: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      showToast(`Failed to process image: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
     } finally {
       setIsUploading(false);
-      // Reset file input
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
+  const handleClearCanvas = () => {
+    const canvas = document.querySelector('canvas');
+    if (canvas) {
+      const ctx = canvas.getContext('2d');
+      if (ctx) { ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+    }
+  };
+
+  const handleUndo = useCallback(() => {
+    const undone = canvasRef.current?.undo();
+    if (!undone) showToast('Nothing left to undo.', 'info');
+  }, [showToast]);
+
+  // Ctrl+Z / Cmd+Z keyboard shortcut
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        canvasRef.current?.undo();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  const activeToolBg = (isActive: boolean, colorVar: string, paleBg: string) =>
+    isActive ? paleBg : 'var(--cream-deep)';
+
   return (
-    <div className="min-h-screen flex flex-col relative" style={{ backgroundColor: '#FFFFFF' }}>
-      {/* Main Content Area - Sidebar + Canvas Layout */}
-      <main className="flex-1 flex flex-col md:flex-row p-3 sm:p-4 md:p-6 gap-3 sm:gap-4 md:gap-6">
-        {/* Left Sidebar - Tools (responsive width) */}
-        <aside className="w-full md:w-1/3 lg:w-1/4 flex flex-col gap-3 sm:gap-4 md:gap-6">
-          {/* Tools Container */}
-          <div className="flex flex-col gap-3 sm:gap-3 md:gap-4 p-3 sm:p-4 md:p-4 rounded-2xl md:rounded-3xl shadow-sm" style={{ backgroundColor: '#F5E6D3', border: '2px solid #D4E4F0' }}>
-            <h2 className="text-xl sm:text-3xl font-bold" style={{ color: '#6B5D5D' }}>Tools</h2>
-            
-            {/* Brush Size Control - Compact */}
-            <div className="space-y-1 sm:space-y-1">
-              <label className="block text-lg sm:text-xl font-semibold" style={{ color: '#6B5D5D' }}>
-                Brush: {brushSize}px
-              </label>
-              <input
-                type="range"
-                min="5"
-                max="100"
-                value={brushSize}
-                onChange={(e) => setBrushSize(Number(e.target.value))}
-                className="w-full h-4 sm:h-5"
+    <div className="min-h-screen flex flex-col" style={{ background: 'var(--bg)' }}>
+      {showLoader && <LoadingScreen onComplete={() => setShowLoader(false)} />}
+      <main className="flex-1 flex flex-col md:flex-row p-3 md:p-5 gap-3 md:gap-4" style={{ minHeight: '100dvh' }}>
+
+        {/* ── Sidebar ──────────────────────────────── */}
+        <aside className="w-full md:w-72 lg:w-80 shrink-0">
+          <div
+            className="h-full flex flex-col gap-5 p-5 rounded-2xl"
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              boxShadow: '0 1px 4px rgba(35,27,19,0.06)',
+            }}
+          >
+            {/* Brand */}
+            <div className="flex items-center justify-between">
+              <div>
+                <h1
+                  className="text-2xl font-semibold leading-none tracking-tight"
+                  style={{ fontFamily: 'var(--font-display)', color: 'var(--ink)' }}
+                >
+                  MindFill
+                </h1>
+                <p className="text-xs mt-0.5" style={{ color: 'var(--muted-light)' }}>
+                  Therapeutic Coloring
+                </p>
+              </div>
+              <button
+                onClick={() => router.push('/gallery')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:opacity-80 active:scale-95"
                 style={{
-                  accentColor: '#8FA8C7',
+                  background: 'var(--cream-deep)',
+                  color: 'var(--muted)',
+                  border: '1px solid var(--border)',
+                  minHeight: '34px',
                 }}
-              />
+              >
+                <Images className="w-3.5 h-3.5" />
+                Gallery
+              </button>
             </div>
 
-            {/* Upload and Fill Row */}
-            <div className="flex gap-2 sm:gap-3">
-              {/* Upload Image Button */}
+            {/* Divider */}
+            <div style={{ borderTop: '1px solid var(--border)' }} />
+
+            {/* Drawing Tools */}
+            <div className="space-y-4">
+              <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--muted-light)' }}>
+                Tools
+              </p>
+
+              {/* Tool Buttons */}
+              <div className="grid grid-cols-3 gap-2">
+                {/* Color */}
+                <button
+                  onClick={() => { setShowColorPicker(true); setIsEraser(false); setIsFloodFill(false); }}
+                  className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl transition-all active:scale-95"
+                  style={{
+                    background: !isEraser && !isFloodFill ? 'var(--sky-pale)' : 'var(--cream-deep)',
+                    color: !isEraser && !isFloodFill ? 'var(--sky)' : 'var(--muted)',
+                    border: `1.5px solid ${!isEraser && !isFloodFill ? 'var(--sky-light)' : 'transparent'}`,
+                    minHeight: '72px',
+                  }}
+                >
+                  <Palette className="w-5 h-5" />
+                  <span className="text-xs font-medium">Color</span>
+                  <span
+                    className="w-4 h-4 rounded-full"
+                    style={{
+                      background: selectedColor,
+                      border: '2px solid rgba(255,255,255,0.8)',
+                      boxShadow: '0 0 0 1px var(--cream-border)',
+                    }}
+                  />
+                </button>
+
+                {/* Fill */}
+                <button
+                  onClick={() => { setIsFloodFill(!isFloodFill); setIsEraser(false); }}
+                  className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl transition-all active:scale-95"
+                  style={{
+                    background: isFloodFill ? 'var(--sage-pale)' : 'var(--cream-deep)',
+                    color: isFloodFill ? 'var(--sage)' : 'var(--muted)',
+                    border: `1.5px solid ${isFloodFill ? 'var(--sage-light)' : 'transparent'}`,
+                    minHeight: '72px',
+                  }}
+                >
+                  <Droplet className="w-5 h-5" />
+                  <span className="text-xs font-medium">Fill</span>
+                </button>
+
+                {/* Eraser */}
+                <button
+                  onClick={() => { setIsEraser(!isEraser); setIsFloodFill(false); }}
+                  className="flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl transition-all active:scale-95"
+                  style={{
+                    background: isEraser ? 'var(--rose-pale)' : 'var(--cream-deep)',
+                    color: isEraser ? 'var(--rose)' : 'var(--muted)',
+                    border: `1.5px solid ${isEraser ? 'var(--rose-light)' : 'transparent'}`,
+                    minHeight: '72px',
+                  }}
+                >
+                  <Eraser className="w-5 h-5" />
+                  <span className="text-xs font-medium">Erase</span>
+                </button>
+              </div>
+
+              {/* Brush Size */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium" style={{ color: 'var(--ink-mid)' }}>
+                    Brush size
+                  </span>
+                  <span
+                    className="text-xs font-mono px-2 py-0.5 rounded-md"
+                    style={{ background: 'var(--cream-deep)', color: 'var(--muted)' }}
+                  >
+                    {brushSize}px
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="5"
+                  max="100"
+                  value={brushSize}
+                  onChange={(e) => setBrushSize(Number(e.target.value))}
+                  className="w-full h-2 rounded-full"
+                  style={{ minHeight: 'unset' }}
+                />
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div style={{ borderTop: '1px solid var(--border)' }} />
+
+            {/* Upload Template */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--muted-light)' }}>
+                Template
+              </p>
               <button
                 onClick={handleUploadClick}
                 disabled={isUploading}
-                className="flex-1 h-14 sm:h-16 md:h-20 rounded-xl sm:rounded-2xl text-lg sm:text-xl md:text-2xl font-bold flex items-center justify-center gap-2 sm:gap-3 transition-all shadow-md hover:shadow-lg active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
-                style={{ 
-                  backgroundColor: '#A8C09A',
-                  color: '#6B5D5D'
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-medium transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{
+                  background: 'var(--cream-deep)',
+                  color: 'var(--ink-mid)',
+                  border: '1.5px dashed var(--cream-border)',
+                  minHeight: '52px',
+                  fontSize: '14px',
                 }}
               >
-                <Upload className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8" />
-                {isUploading ? 'Uploading...' : 'Upload'}
+                <Upload className="w-4 h-4" />
+                {isUploading ? 'Processing…' : 'Upload Image'}
               </button>
               <input
                 ref={fileInputRef}
@@ -682,167 +575,122 @@ export default function HomePage() {
                 className="hidden"
                 aria-label="Upload image template"
               />
-
-              {/* Flood Fill Button */}
-              <button
-                onClick={() => {
-                  setIsFloodFill(!isFloodFill);
-                  setIsEraser(false); // Turn off eraser when using flood fill
-                }}
-                className={`flex-1 h-14 sm:h-16 md:h-20 rounded-xl sm:rounded-2xl text-lg sm:text-xl md:text-2xl font-bold flex items-center justify-center gap-2 sm:gap-3 transition-all shadow-md hover:shadow-lg active:scale-95 ${
-                  isFloodFill ? 'ring-2 sm:ring-4 ring-[#8FA8C7]' : ''
-                }`}
-                style={{ 
-                  backgroundColor: isFloodFill ? '#8FA8C7' : '#D4E4F0',
-                  color: isFloodFill ? '#FFFFFF' : '#6B5D5D',
-                  border: isFloodFill ? '2px solid #8FA8C7' : '2px solid #D4E4F0'
-                }}
-              >
-                <Droplet className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8" />
-                <span className="hidden sm:inline">Fill</span>
-                <span className="sm:hidden">Fill</span>
-              </button>
             </div>
 
-            {/* Colors and Eraser Row */}
-            <div className="flex gap-2 sm:gap-3">
-              {/* Color Picker Button */}
-              <button
-                onClick={() => {
-                  setShowColorPicker(true);
-                  setIsEraser(false); // Turn off eraser when opening color picker
-                  setIsFloodFill(false); // Turn off flood fill when opening color picker
-                }}
-                className="flex-1 h-14 sm:h-16 md:h-20 rounded-xl sm:rounded-2xl text-lg sm:text-xl md:text-2xl font-bold flex items-center justify-center gap-2 sm:gap-3 transition-all shadow-md hover:shadow-lg active:scale-95"
-                style={{ 
-                  backgroundColor: '#F4C2A1',
-                  color: '#6B5D5D'
-                }}
-              >
-                <Palette 
-                  className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8" 
-                  stroke={selectedColor}
-                  fill={selectedColor}
-                />
-                <span className="hidden sm:inline">Colors</span>
-                <span className="sm:hidden">Colour</span>
-              </button>
+            {/* Divider */}
+            <div style={{ borderTop: '1px solid var(--border)' }} />
 
-              {/* Eraser Button */}
-              <button
-                onClick={() => {
-                  setIsEraser(!isEraser);
-                  setIsFloodFill(false); // Turn off flood fill when using eraser
-                }}
-                className={`flex-1 h-14 sm:h-16 md:h-20 rounded-xl sm:rounded-2xl text-lg sm:text-xl md:text-2xl font-bold flex items-center justify-center gap-2 sm:gap-3 transition-all shadow-md hover:shadow-lg active:scale-95 ${
-                  isEraser ? 'ring-2 sm:ring-4 ring-[#C17767]' : ''
-                }`}
-                style={{ 
-                  backgroundColor: isEraser ? '#D4A5A5' : '#A9AFB4',
-                  color: isEraser ? '#FFFFFF' : '#6B5D5D',
-                  border: isEraser ? '2px solid #C17767' : '2px solid #A9AFB4'
-                }}
+            {/* Mode Toggle */}
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-widest" style={{ color: 'var(--muted-light)' }}>
+                Session Mode
+              </p>
+              <div
+                className="flex p-1 rounded-xl gap-1"
+                style={{ background: 'var(--cream-deep)' }}
               >
-                <Eraser className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8" />
-                Eraser
-              </button>
+                <button
+                  onClick={() => setMode('fun')}
+                  className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
+                  style={{
+                    background: mode === 'fun' ? 'var(--surface)' : 'transparent',
+                    color: mode === 'fun' ? 'var(--ink)' : 'var(--muted)',
+                    boxShadow: mode === 'fun' ? '0 1px 3px rgba(35,27,19,0.08)' : 'none',
+                    minHeight: '38px',
+                  }}
+                >
+                  Fun
+                </button>
+                <button
+                  onClick={() => setMode('care')}
+                  className="flex-1 py-2 rounded-lg text-sm font-semibold transition-all"
+                  style={{
+                    background: mode === 'care' ? 'var(--surface)' : 'transparent',
+                    color: mode === 'care' ? 'var(--sage)' : 'var(--muted)',
+                    boxShadow: mode === 'care' ? '0 1px 3px rgba(35,27,19,0.08)' : 'none',
+                    minHeight: '38px',
+                  }}
+                >
+                  Care
+                </button>
+              </div>
+              {mode === 'care' && (
+                <p className="text-xs" style={{ color: 'var(--muted-light)' }}>
+                  Session tracking &amp; AI analysis enabled
+                </p>
+              )}
             </div>
 
-            {/* Save and Clear Row */}
-            <div className="flex gap-2 sm:gap-3">
-              {/* Save Button */}
+            {/* Spacer */}
+            <div className="flex-1" />
+
+            {/* Actions */}
+            <div className="space-y-2">
               <button
                 onClick={handleSave}
-                className="flex-1 h-14 sm:h-16 md:h-20 rounded-xl sm:rounded-2xl text-lg sm:text-xl md:text-2xl font-bold flex items-center justify-center gap-2 sm:gap-3 transition-all shadow-md hover:shadow-lg active:scale-95"
-                style={{ 
-                  backgroundColor: '#8FA8C7',
-                  color: '#6B5D5D'
-                }}
-              >
-                <Save className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8" />
-                Save
-              </button>
-
-              {/* Clear Button */}
-              <button
-                onClick={() => {
-                  const canvas = document.querySelector('canvas');
-                  if (canvas) {
-                    const ctx = canvas.getContext('2d');
-                    if (ctx) {
-                      ctx.fillStyle = '#FFFFFF';
-                      ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    }
-                  }
-                }}
-                className="flex-1 h-14 sm:h-16 md:h-20 rounded-xl sm:rounded-2xl text-lg sm:text-xl md:text-2xl font-bold transition-all shadow-md hover:shadow-lg active:scale-95"
-                style={{ 
-                  backgroundColor: '#A8C09A',
-                  color: '#6B5D5D'
-                }}
-              >
-                Clear
-              </button>
-            </div>
-          </div>
-
-          {/* Mode Selector Container */}
-          <div className="flex flex-col gap-2 sm:gap-3 p-3 sm:p-4 md:p-6 rounded-2xl md:rounded-3xl shadow-sm" style={{ backgroundColor: '#F5E6D3', border: '2px solid #D4E4F0' }}>
-            <h2 className="text-xl sm:text-2xl font-bold" style={{ color: '#6B5D5D' }}>Mode</h2>
-            
-            <div className="flex gap-2 sm:gap-3">
-              {/* Fun Mode Button */}
-              <button
-                onClick={() => setMode('fun')}
-                className={`flex-1 py-2 sm:py-3 md:py-4 rounded-xl sm:rounded-2xl text-lg sm:text-xl md:text-2xl font-bold transition-all shadow-md hover:shadow-lg active:scale-95 ${
-                  mode === 'fun' ? 'ring-2 ring-[#8FA8C7]' : ''
-                }`}
+                className="w-full flex items-center justify-center gap-2 py-3.5 rounded-xl font-semibold text-white transition-all hover:opacity-90 active:scale-95"
                 style={{
-                  backgroundColor: mode === 'fun' ? '#8FA8C7' : '#FFFFFF',
-                  color: mode === 'fun' ? '#FFFFFF' : '#6B5D5D',
+                  background: 'var(--terracotta)',
+                  fontSize: '15px',
+                  minHeight: '52px',
                 }}
               >
-                Fun
+                <Save className="w-4 h-4" />
+                Save to Gallery
               </button>
-              {/* Care Mode Button */}
-              <button
-                onClick={() => setMode('care')}
-                className={`flex-1 py-2 sm:py-3 md:py-4 rounded-xl sm:rounded-2xl text-lg sm:text-xl md:text-2xl font-bold transition-all shadow-md hover:shadow-lg active:scale-95 ${
-                  mode === 'care' ? 'ring-2 ring-[#8FA8C7]' : ''
-                }`}
-                style={{
-                  backgroundColor: mode === 'care' ? '#A8C09A' : '#FFFFFF',
-                  color: mode === 'care' ? '#FFFFFF' : '#6B5D5D',
-                }}
-              >
-                Care
-              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleUndo}
+                  title="Undo (Ctrl+Z)"
+                  className="flex items-center justify-center gap-1.5 flex-1 py-2.5 rounded-xl font-medium transition-all hover:opacity-80 active:scale-95"
+                  style={{
+                    background: 'var(--cream-deep)',
+                    color: 'var(--ink-mid)',
+                    border: '1px solid var(--border)',
+                    fontSize: '13px',
+                    minHeight: '42px',
+                  }}
+                >
+                  <Undo2 className="w-3.5 h-3.5" />
+                  Undo
+                </button>
+                <button
+                  onClick={handleClearCanvas}
+                  className="flex-1 py-2.5 rounded-xl font-medium transition-all hover:opacity-80 active:scale-95"
+                  style={{
+                    background: 'transparent',
+                    color: 'var(--muted)',
+                    border: '1px solid var(--border)',
+                    fontSize: '13px',
+                    minHeight: '42px',
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
             </div>
           </div>
         </aside>
 
-        {/* Canvas Area (responsive width) */}
-        <div className="w-full md:w-2/3 lg:w-3/4 flex flex-col">
-          <div 
-            className="flex-1 rounded-2xl md:rounded-3xl p-3 sm:p-4 md:p-5 shadow-lg" 
-            style={{ 
-              display: 'flex', 
-              flexDirection: 'column',
-              backgroundColor: '#D4E4F0',
-              border: '2px solid #A8C09A',
-              minHeight: 'calc(100vh - 120px)',
-              maxHeight: 'calc(100vh - 120px)'
+        {/* ── Canvas Area ───────────────────────────── */}
+        <div className="flex-1 min-w-0 min-h-0">
+          <div
+            className="h-full rounded-2xl p-2.5"
+            style={{
+              background: 'var(--cream-deep)',
+              border: '1px solid var(--border)',
+              minHeight: 'calc(100dvh - 2.5rem)',
             }}
           >
-            <div 
-              className="w-full h-full bg-white rounded-xl sm:rounded-2xl overflow-hidden shadow-inner" 
-              style={{ 
-                position: 'relative',
-                border: '2px solid #D4E4F0',
-                minHeight: '100%'
+            <div
+              className="w-full h-full bg-white rounded-xl overflow-hidden"
+              style={{
+                border: '1px solid var(--cream-border)',
+                boxShadow: 'inset 0 1px 4px rgba(35,27,19,0.05)',
               }}
             >
               <Canvas
+                ref={canvasRef}
                 color={selectedColor}
                 brushSize={brushSize}
                 isEraser={isEraser}
@@ -856,7 +704,10 @@ export default function HomePage() {
         </div>
       </main>
 
-      {/* Color Picker Modal */}
+      {/* ── Toast Notifications ─────────────────────── */}
+      <Toast toasts={toasts} onDismiss={dismissToast} />
+
+      {/* ── Modals ───────────────────────────────────── */}
       <ColorPicker
         isOpen={showColorPicker}
         onClose={() => setShowColorPicker(false)}
@@ -864,7 +715,6 @@ export default function HomePage() {
         onColorSelect={setSelectedColor}
       />
 
-      {/* Session Summary Modal */}
       <SessionSummaryModal
         isOpen={showSessionSummary}
         onNext={handleSessionSummaryNext}
@@ -873,7 +723,6 @@ export default function HomePage() {
         imageSize={getCanvasDimensions()}
       />
 
-      {/* Session Report Modal (Phase 3) */}
       <SessionReportModal
         isOpen={showSessionReport}
         onClose={handleReportClose}
@@ -881,31 +730,6 @@ export default function HomePage() {
         onDownloadReport={handleDownloadReport}
       />
 
-
-      {/* Logo in bottom left corner - responsive size */}
-      <div 
-        className="fixed bottom-0 left-0 p-2 sm:p-3 md:p-4 z-10"
-        style={{ 
-          pointerEvents: 'none' // Allow clicks to pass through
-        }}
-      >
-        <div 
-          onClick={() => router.push('/gallery')}
-          className="cursor-pointer transition-transform hover:scale-110 active:scale-95"
-          style={{ pointerEvents: 'auto' }}
-        >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/app-logo.png"
-            alt="MindFill Logo - Click to view Gallery"
-            className="object-contain drop-shadow-lg w-20 h-20 sm:w-28 sm:h-28 md:w-48 md:h-48 lg:w-[200px] lg:h-[200px]"
-            onError={(e) => {
-              console.error('Failed to load logo image:', e);
-              (e.target as HTMLImageElement).style.display = 'none';
-            }}
-          />
-        </div>
-      </div>
     </div>
   );
 }

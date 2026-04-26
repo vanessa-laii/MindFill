@@ -1,77 +1,96 @@
 'use client';
 
-import { useRef, useEffect, useState, useCallback } from 'react';
+import { useRef, useEffect, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { floodFill, hexToRgb } from '@/lib/floodFill';
+
+export interface CanvasHandle {
+  undo: () => boolean; // returns true if something was undone
+}
 
 interface CanvasProps {
   color: string;
   brushSize: number;
   isEraser?: boolean;
-  baseImage?: string; // Data URL or URL of the outline/base image
+  baseImage?: string;
   mode?: 'fun' | 'care';
-  isFloodFill?: boolean; // Flood fill toggle
+  isFloodFill?: boolean;
   onEvent?: (event: {
     type: 'fill' | 'draw' | 'erase' | 'move';
     x: number;
     y: number;
     timestamp: number;
-  }) => void; // Phase 1: Event tracking callback
+  }) => void;
 }
 
-export default function Canvas({ color, brushSize, isEraser = false, baseImage, mode = 'fun', isFloodFill = false, onEvent }: CanvasProps) {
+const MAX_HISTORY = 40;
+
+const Canvas = forwardRef<CanvasHandle, CanvasProps>(function Canvas(
+  { color, brushSize, isEraser = false, baseImage, mode = 'fun', isFloodFill = false, onEvent },
+  ref
+) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const lastPointRef = useRef<{ x: number; y: number } | null>(null);
+  // For smooth Bézier strokes: track the midpoint of the previous segment
+  const lastMidRef = useRef<{ x: number; y: number } | null>(null);
   const baseImageLoadedRef = useRef<boolean>(false);
-  
-  // Phase 1: Throttle move events to every 50ms
+  const baseImageUrlRef = useRef<string | undefined>(baseImage);
+
+  // Undo history: array of ImageData snapshots
+  const historyRef = useRef<ImageData[]>([]);
+
+  // Phase 1: Throttle move events
   const lastMoveEventRef = useRef<number>(0);
   const MOVE_EVENT_THROTTLE_MS = 50;
 
-  // Store baseImage URL to reload after resize - use a ref that's updated when baseImage changes
-  const baseImageUrlRef = useRef<string | undefined>(baseImage);
-  
-  // Update baseImage URL ref when it changes
+  // ── Imperative handle ─────────────────────────────────────
+  useImperativeHandle(ref, () => ({
+    undo: () => {
+      const canvas = canvasRef.current;
+      if (!canvas || historyRef.current.length === 0) return false;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return false;
+      const snapshot = historyRef.current.pop()!;
+      ctx.putImageData(snapshot, 0, 0);
+      return true;
+    },
+  }), []);
+
+  // ── Snapshot helper ───────────────────────────────────────
+  const pushSnapshot = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || canvas.width === 0 || canvas.height === 0) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    historyRef.current.push(snapshot);
+    if (historyRef.current.length > MAX_HISTORY) {
+      historyRef.current.shift(); // drop oldest
+    }
+  }, []);
+
+  // ── Base image loading ────────────────────────────────────
   useEffect(() => {
     if (baseImageUrlRef.current !== baseImage) {
-      console.log('baseImage prop changed, updating ref');
       baseImageUrlRef.current = baseImage;
     }
   }, [baseImage]);
 
-  // Function to load and draw base image
   const loadBaseImage = useCallback((targetCtx: CanvasRenderingContext2D, targetWidth: number, targetHeight: number) => {
     const currentBaseImage = baseImageUrlRef.current;
-    if (!currentBaseImage) {
-      console.log('No baseImage URL to load');
-      return;
-    }
+    if (!currentBaseImage) return;
 
-    console.log('Loading base image:', currentBaseImage.substring(0, 50) + '...');
-    
     const img = new Image();
-    // For data URLs, we don't need crossOrigin
-    if (!currentBaseImage.startsWith('data:')) {
-      img.crossOrigin = 'anonymous';
-    }
-    
-        img.onload = () => {
-      console.log('Base image loaded successfully, dimensions:', img.width, 'x', img.height);
-      console.log('Drawing on canvas size:', targetWidth, 'x', targetHeight);
-      
-      // Clear and set white background first
+    if (!currentBaseImage.startsWith('data:')) img.crossOrigin = 'anonymous';
+
+    img.onload = () => {
       targetCtx.fillStyle = '#FFFFFF';
       targetCtx.fillRect(0, 0, targetWidth, targetHeight);
-      
-      // Draw the base image, scaling to fit canvas while maintaining aspect ratio
+
       const imgAspect = img.width / img.height;
       const canvasAspect = targetWidth / targetHeight;
-      
-      let drawWidth = targetWidth;
-      let drawHeight = targetHeight;
-      let offsetX = 0;
-      let offsetY = 0;
-      
+      let drawWidth = targetWidth, drawHeight = targetHeight, offsetX = 0, offsetY = 0;
+
       if (imgAspect > canvasAspect) {
         drawHeight = targetWidth / imgAspect;
         offsetY = (targetHeight - drawHeight) / 2;
@@ -79,57 +98,39 @@ export default function Canvas({ color, brushSize, isEraser = false, baseImage, 
         drawWidth = targetHeight * imgAspect;
         offsetX = (targetWidth - drawWidth) / 2;
       }
-      
-      console.log('Drawing image at:', offsetX, offsetY, 'size:', drawWidth, 'x', drawHeight);
-      
-      // Ensure we're drawing with correct composite operation
+
       targetCtx.globalCompositeOperation = 'source-over';
       targetCtx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
-      
-      // Verify image was drawn by checking a sample pixel
-      const testPixel = targetCtx.getImageData(Math.floor(targetWidth / 2), Math.floor(targetHeight / 2), 1, 1);
-      console.log('Sample pixel after drawing (center):', testPixel.data);
-      
       baseImageLoadedRef.current = true;
-      console.log('Base image drawn successfully');
+
+      // Clear undo history when a new template is loaded
+      historyRef.current = [];
     };
-    
-    img.onerror = (error) => {
-      console.error('Failed to load base image:', error);
-      console.error('Image URL was:', currentBaseImage.substring(0, 100));
-      baseImageLoadedRef.current = false;
-    };
-    
+
+    img.onerror = () => { baseImageLoadedRef.current = false; };
     img.src = currentBaseImage;
   }, []);
 
-  // Initialize canvas
+  // ── Canvas initialisation / resize ───────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Set canvas size to match its displayed size
     const resizeCanvas = () => {
-      // Use the canvas's own bounding rect to get displayed size
       const rect = canvas.getBoundingClientRect();
       const width = rect.width;
       const height = rect.height;
 
-      // Only resize if dimensions are valid and different
       if (width > 0 && height > 0 && (canvas.width !== width || canvas.height !== height)) {
-        // Store the current drawing state to restore after resize
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const hasContent = imageData.width > 0 && imageData.height > 0 && 
-          imageData.data.some((value, index) => index % 4 !== 3 && value !== 255); // Check if not all white
+        const hasContent = imageData.width > 0 && imageData.height > 0 &&
+          imageData.data.some((value, index) => index % 4 !== 3 && value !== 255);
 
-        // Set canvas internal dimensions (must be integers)
         canvas.width = Math.floor(width);
         canvas.height = Math.floor(height);
 
-        // Restore the drawing if we had content
         if (hasContent) {
           const tempCanvas = document.createElement('canvas');
           tempCanvas.width = imageData.width;
@@ -137,24 +138,13 @@ export default function Canvas({ color, brushSize, isEraser = false, baseImage, 
           const tempCtx = tempCanvas.getContext('2d');
           if (tempCtx) {
             tempCtx.putImageData(imageData, 0, 0);
-            // Draw white background first, then restore content
             ctx.fillStyle = '#FFFFFF';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(tempCanvas, 0, 0, canvas.width, canvas.height);
-            
-            // If we have a base image, make sure it's on the bottom layer
-            // The restored content should include both base image and drawings
-            // But if baseImage exists, we should redraw it to ensure it's visible
-            if (baseImageUrlRef.current) {
-              // Redraw base image after restoring (it should already be in the imageData, but ensure it's there)
-              // Actually, since imageData should contain everything, we don't need to redraw
-            }
           }
         } else {
-          // Fresh canvas or resize without content - white background, then reload base image
           ctx.fillStyle = '#FFFFFF';
           ctx.fillRect(0, 0, canvas.width, canvas.height);
-          // Reload base image after resize if it exists (with small delay to ensure resize is complete)
           if (baseImageUrlRef.current) {
             setTimeout(() => {
               baseImageLoadedRef.current = false;
@@ -163,12 +153,10 @@ export default function Canvas({ color, brushSize, isEraser = false, baseImage, 
           }
         }
       } else if (canvas.width === 0 || canvas.height === 0) {
-        // Initial setup - white background
         canvas.width = Math.floor(width) || 800;
         canvas.height = Math.floor(height) || 600;
         ctx.fillStyle = '#FFFFFF';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
-        // Load base image after initial white background is set
         if (baseImageUrlRef.current) {
           baseImageLoadedRef.current = false;
           loadBaseImage(ctx, canvas.width, canvas.height);
@@ -176,21 +164,14 @@ export default function Canvas({ color, brushSize, isEraser = false, baseImage, 
       }
     };
 
-    // Initial resize with a small delay to ensure container is rendered
-    setTimeout(() => {
-      resizeCanvas();
-    }, 0);
+    setTimeout(() => resizeCanvas(), 0);
 
-    // Also use ResizeObserver to handle container size changes
     const resizeObserver = new ResizeObserver(() => {
-      // Use requestAnimationFrame to ensure DOM is updated
       requestAnimationFrame(() => {
         resizeCanvas();
-        // After resize, reload base image if it exists
         if (baseImageUrlRef.current && canvas.width > 0 && canvas.height > 0) {
           const currentCtx = canvas.getContext('2d');
           if (currentCtx) {
-            // Small delay to ensure resize is complete
             setTimeout(() => {
               baseImageLoadedRef.current = false;
               loadBaseImage(currentCtx, canvas.width, canvas.height);
@@ -200,211 +181,174 @@ export default function Canvas({ color, brushSize, isEraser = false, baseImage, 
       });
     });
 
-    // Observe both the canvas and its parent container
     resizeObserver.observe(canvas);
     const container = canvas.parentElement;
-    if (container) {
-      resizeObserver.observe(container);
-    }
+    if (container) resizeObserver.observe(container);
 
-    const handleResize = () => {
-      resizeCanvas();
-    };
-
-    window.addEventListener('resize', handleResize);
+    window.addEventListener('resize', resizeCanvas);
 
     return () => {
-      window.removeEventListener('resize', handleResize);
-      if (container) {
-        resizeObserver.unobserve(container);
-      }
+      window.removeEventListener('resize', resizeCanvas);
+      if (container) resizeObserver.unobserve(container);
     };
-  }, [loadBaseImage]); // Include loadBaseImage in dependencies
+  }, [loadBaseImage]);
 
-  // Effect to reload base image when it changes
+  // ── Reload when baseImage prop changes ───────────────────
   useEffect(() => {
-    if (!baseImage) {
-      console.log('baseImage is empty, clearing flag');
-      baseImageLoadedRef.current = false;
-      return;
-    }
-
-    console.log('baseImage changed, loading onto canvas...');
+    if (!baseImage) { baseImageLoadedRef.current = false; return; }
 
     const loadBaseImageOnCanvas = () => {
       const canvas = canvasRef.current;
-      if (!canvas) {
-        console.log('Canvas not found, retrying...');
-        setTimeout(loadBaseImageOnCanvas, 100);
-        return;
-      }
-
-      if (canvas.width === 0 || canvas.height === 0) {
-        console.log('Canvas not initialized yet (width:', canvas.width, 'height:', canvas.height, '), retrying...');
-        setTimeout(loadBaseImageOnCanvas, 100);
-        return;
-      }
-
-      // Always reload when baseImage changes (reset flag)
+      if (!canvas) { setTimeout(loadBaseImageOnCanvas, 100); return; }
+      if (canvas.width === 0 || canvas.height === 0) { setTimeout(loadBaseImageOnCanvas, 100); return; }
       baseImageLoadedRef.current = false;
-
       const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        console.log('Cannot get context, retrying...');
-        setTimeout(loadBaseImageOnCanvas, 100);
-        return;
-      }
-
-      console.log('Canvas ready, loading base image. Canvas size:', canvas.width, 'x', canvas.height);
-      // Load the base image
+      if (!ctx) { setTimeout(loadBaseImageOnCanvas, 100); return; }
       loadBaseImage(ctx, canvas.width, canvas.height);
     };
 
-    // Load base image when it changes
-    // Use a delay to ensure canvas is fully initialized and any resize operations are complete
-    setTimeout(() => {
-      loadBaseImageOnCanvas();
-    }, 300);
+    setTimeout(() => loadBaseImageOnCanvas(), 300);
   }, [baseImage, loadBaseImage]);
 
-  // Get coordinates from event
+  // ── Coordinate helper ─────────────────────────────────────
   const getCoordinates = useCallback((e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas || canvas.width === 0 || canvas.height === 0) return { x: 0, y: 0 };
-
     const rect = canvas.getBoundingClientRect();
-    
-    // Get mouse position relative to canvas element
-    const relativeX = e.clientX - rect.left;
-    const relativeY = e.clientY - rect.top;
-
-    // Calculate scale factor if CSS size differs from internal size
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
-    
-    // Convert to canvas coordinates
-    const x = relativeX * scaleX;
-    const y = relativeY * scaleY;
-
-    // Ensure coordinates are within canvas bounds
-    return { 
-      x: Math.max(0, Math.min(Math.floor(x), canvas.width)), 
-      y: Math.max(0, Math.min(Math.floor(y), canvas.height)) 
+    return {
+      x: Math.max(0, Math.min(Math.floor((e.clientX - rect.left) * scaleX), canvas.width)),
+      y: Math.max(0, Math.min(Math.floor((e.clientY - rect.top) * scaleY), canvas.height)),
     };
   }, []);
 
-  // Draw function
-  const draw = useCallback((currentX: number, currentY: number, lastX: number | null, lastY: number | null) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
+  // ── Context setup helper ──────────────────────────────────
+  const applyBrushStyle = useCallback((ctx: CanvasRenderingContext2D) => {
     if (isEraser) {
-      // Eraser mode: use destination-out composite to erase
       ctx.globalCompositeOperation = 'destination-out';
-      ctx.strokeStyle = 'rgba(0, 0, 0, 1)'; // Fully opaque for erasing
-      ctx.fillStyle = 'rgba(0, 0, 0, 1)';
+      ctx.strokeStyle = 'rgba(0,0,0,1)';
+      ctx.fillStyle   = 'rgba(0,0,0,1)';
     } else {
-      // Normal drawing mode
       ctx.globalCompositeOperation = 'source-over';
       ctx.strokeStyle = color;
-      ctx.fillStyle = color;
+      ctx.fillStyle   = color;
     }
-
-    ctx.lineWidth = brushSize;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    ctx.beginPath();
-
-    if (lastX !== null && lastY !== null) {
-      // Draw line from last point to current point
-      ctx.moveTo(lastX, lastY);
-      ctx.lineTo(currentX, currentY);
-      ctx.stroke();
-    } else {
-      // Draw a dot at current point
-      ctx.arc(currentX, currentY, brushSize / 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    // Reset composite operation after drawing
-    ctx.globalCompositeOperation = 'source-over';
+    ctx.lineWidth  = brushSize;
+    ctx.lineCap    = 'round';
+    ctx.lineJoin   = 'round';
+    ctx.miterLimit = 1;
   }, [color, brushSize, isEraser]);
 
-  // Handle mouse/pointer down
+  // ── Pointer down ──────────────────────────────────────────
   const handleStart = useCallback((e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
-    
     const canvas = canvasRef.current;
     if (!canvas) return;
-    
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    
+
     const { x, y } = getCoordinates(e);
     const timestamp = Date.now();
-    
-    // Phase 1: Track click event
+
+    // Save snapshot BEFORE any pixels change
+    pushSnapshot();
+
     if (onEvent) {
-      if (!isEraser && isFloodFill) {
-        onEvent({ type: 'fill', x, y, timestamp });
-      } else if (isEraser) {
-        onEvent({ type: 'erase', x, y, timestamp });
-      } else {
-        onEvent({ type: 'draw', x, y, timestamp });
-      }
+      if (!isEraser && isFloodFill) onEvent({ type: 'fill', x, y, timestamp });
+      else if (isEraser) onEvent({ type: 'erase', x, y, timestamp });
+      else onEvent({ type: 'draw', x, y, timestamp });
     }
-    
-    // If flood fill is active, perform flood fill on click
+
     if (!isEraser && isFloodFill) {
       const fillColor = hexToRgb(color);
-      floodFill(ctx, x, y, {
-        fillColor,
-        tolerance: 30, // Tolerance to handle slightly gray edges
-      });
+      floodFill(ctx, x, y, { fillColor, tolerance: 30 });
       return;
     }
-    
-    // Otherwise, use normal drawing
+
     setIsDrawing(true);
     lastPointRef.current = { x, y };
-    draw(x, y, null, null);
-  }, [getCoordinates, draw, isEraser, isFloodFill, color, onEvent]);
+    lastMidRef.current = null;
 
-  // Handle mouse/pointer move
+    // Draw a dot at the starting point
+    applyBrushStyle(ctx);
+    ctx.beginPath();
+    ctx.arc(x, y, brushSize / 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+  }, [getCoordinates, applyBrushStyle, isEraser, isFloodFill, color, brushSize, onEvent, pushSnapshot]);
+
+  // ── Pointer move ──────────────────────────────────────────
   const handleMove = useCallback((e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawing) return;
     e.preventDefault();
 
     const { x, y } = getCoordinates(e);
     const timestamp = Date.now();
-    
-    // Phase 1: Track move event (throttled to every 50ms)
+
     if (onEvent && timestamp - lastMoveEventRef.current >= MOVE_EVENT_THROTTLE_MS) {
       onEvent({ type: 'move', x, y, timestamp });
       lastMoveEventRef.current = timestamp;
     }
-    
-    if (lastPointRef.current) {
-      draw(x, y, lastPointRef.current.x, lastPointRef.current.y);
-      lastPointRef.current = { x, y };
-    }
-  }, [isDrawing, getCoordinates, draw, onEvent]);
 
-  // Handle mouse/pointer up
+    const last = lastPointRef.current;
+    if (!last) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Midpoint between last recorded point and current point
+    const mid = { x: (last.x + x) / 2, y: (last.y + y) / 2 };
+
+    applyBrushStyle(ctx);
+    ctx.beginPath();
+
+    // Move to the previous midpoint (or the very first point if this is the first segment)
+    const startPt = lastMidRef.current ?? last;
+    ctx.moveTo(startPt.x, startPt.y);
+
+    // Quadratic Bézier: control = last cursor position, endpoint = current midpoint
+    // This makes each segment curve smoothly through the last sampled point
+    ctx.quadraticCurveTo(last.x, last.y, mid.x, mid.y);
+    ctx.stroke();
+
+    ctx.globalCompositeOperation = 'source-over';
+
+    lastMidRef.current   = mid;
+    lastPointRef.current = { x, y };
+  }, [isDrawing, getCoordinates, applyBrushStyle, onEvent]);
+
+  // ── Pointer up / leave ────────────────────────────────────
   const handleEnd = useCallback((e: React.MouseEvent<HTMLCanvasElement> | React.PointerEvent<HTMLCanvasElement>) => {
     e.preventDefault();
+
+    // Flush the final tiny segment to the last actual cursor position
+    const last = lastPointRef.current;
+    const lastMid = lastMidRef.current;
+    if (last && lastMid) {
+      const canvas = canvasRef.current;
+      const ctx = canvas?.getContext('2d');
+      if (ctx) {
+        applyBrushStyle(ctx);
+        ctx.beginPath();
+        ctx.moveTo(lastMid.x, lastMid.y);
+        ctx.quadraticCurveTo(last.x, last.y, last.x, last.y);
+        ctx.stroke();
+        ctx.globalCompositeOperation = 'source-over';
+      }
+    }
+
     setIsDrawing(false);
     lastPointRef.current = null;
-  }, []);
+    lastMidRef.current   = null;
+  }, [applyBrushStyle]);
 
-  // Handle mouse leave
   const handleLeave = useCallback(() => {
     setIsDrawing(false);
     lastPointRef.current = null;
+    lastMidRef.current   = null;
   }, []);
 
   return (
@@ -427,4 +371,6 @@ export default function Canvas({ color, brushSize, isEraser = false, baseImage, 
       }}
     />
   );
-}
+});
+
+export default Canvas;

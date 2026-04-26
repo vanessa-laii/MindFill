@@ -1,69 +1,127 @@
 @import "tailwindcss";
 
+/* ── Design Tokens ─────────────────────────────────────────── */
 :root {
-  /* Color Palette - Cheerful, Minimalistic, Elderly-Friendly */
-  --cream-beige: #F5E6D3;
-  --taupe: #8B7D6B;
-  --sage-green: #A8C09A;
-  --pale-blue: #D4E4F0;
-  --slate-blue: #8FA8C7;
-  --peach: #F4C2A1;
-  --rose: #D4A5A5;
-  --terracotta: #C17767;
-  
-  /* UI Colors */
-  --background: #ffffff;
-  --foreground: #6B5D5D; /* Softer text color using taupe */
-  --primary-bg: #ffffff;
-  --primary-text: #6B5D5D;
-  --secondary-bg: #F5E6D3; /* Cream beige for soft backgrounds */
-  --accent: #8FA8C7; /* Slate blue for accents */
-  --border-soft: #D4E4F0; /* Pale blue for soft borders */
-  --card-bg: #FAFAFA;
+  /* Warm neutral foundation */
+  --cream:         #FAF8F5;
+  --cream-deep:    #F3EDE4;
+  --cream-deeper:  #EAE0D4;
+  --cream-border:  #DDD1C0;
+
+  /* Typography */
+  --ink:           #231B13;
+  --ink-mid:       #4A3C30;
+  --muted:         #7A6458;
+  --muted-light:   #A8988C;
+
+  /* Accent palette — sophisticated pastels */
+  --sage:          #6FA87A;
+  --sage-light:    #B4D4BC;
+  --sage-pale:     #ECF5EE;
+
+  --sky:           #6BA6C0;
+  --sky-light:     #B0D2E5;
+  --sky-pale:      #E7F2F8;
+
+  --peach:         #D98F68;
+  --peach-light:   #EDBFA0;
+  --peach-pale:    #FAF0E7;
+
+  --rose:          #BD8282;
+  --rose-light:    #DCAFAF;
+  --rose-pale:     #F5EAEA;
+
+  --terracotta:    #AF5E47;
+  --terracotta-light: #CE9282;
+  --terracotta-pale:  #F3EAE7;
+
+  /* Semantic surface tokens */
+  --bg:            var(--cream);
+  --surface:       #FFFFFF;
+  --surface-warm:  var(--cream-deep);
+  --border:        var(--cream-border);
+  --border-subtle: var(--cream-deeper);
+
+  --text:          var(--ink);
+  --text-2:        var(--muted);
+  --text-3:        var(--muted-light);
+
+  --accent:        var(--sky);
+  --accent-green:  var(--sage);
 }
 
+/* ── Tailwind Theme Integration ─────────────────────────────── */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: Helvetica, Arial, sans-serif;
-  --font-mono: 'Courier New', monospace;
+  --color-background:     var(--bg);
+  --color-foreground:     var(--text);
+  --font-display:         'Playfair Display', Georgia, serif;
+  --font-sans:            'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-mono:            'JetBrains Mono', 'Courier New', monospace;
 }
 
-/* Force light mode for dementia-friendly UI */
+/* ── Base Styles ─────────────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
 body {
-  background: var(--primary-bg);
-  color: var(--primary-text);
-  font-family: Helvetica, Arial, sans-serif;
-  font-size: 24px; /* Minimum 24pt for accessibility */
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 16px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  line-height: 1.6;
+  line-height: 1.65;
 }
 
-/* Ensure high contrast for all text */
-* {
-  color: var(--primary-text);
-}
-
-/* Minimum button sizes for accessibility (80px tall) */
+/* ── Buttons ─────────────────────────────────────────────────── */
 button {
-  min-height: 80px;
-  min-width: 80px;
+  min-height: 48px;
   cursor: pointer;
   border-radius: 12px;
-}
-
-/* High contrast focus indicators */
-button:focus-visible,
-input:focus-visible,
-select:focus-visible {
-  outline: 4px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* Prevent text selection on UI elements for easier interaction */
-button {
+  font-family: var(--font-sans);
+  font-size: 15px;
+  font-weight: 500;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   user-select: none;
   -webkit-user-select: none;
   -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--sky);
+  outline-offset: 2px;
+}
+
+/* ── Form elements ───────────────────────────────────────────── */
+input[type="range"] {
+  accent-color: var(--sky);
+  cursor: pointer;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: var(--cream-deep);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--cream-border);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-light);
+}
+
+/* ── Utility ─────────────────────────────────────────────────── */
+.font-display {
+  font-family: var(--font-display);
+}
+
+.text-balance {
+  text-wrap: balance;
 }

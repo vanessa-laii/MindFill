@@ -65,6 +65,8 @@ Based on the quadrant activity distribution, provide a 3-sentence summary for a 
 
 Keep the language clear, compassionate, and informative. Focus on what the quadrant data suggests about the patient's current state, with particular attention to both horizontal and vertical spatial neglect patterns.`;
 
+    console.log('Calling Gemini API with prompt:', prompt);
+    
     // Try gemini-2.5-flash first, fallback to gemini-1.5-flash if rate limited
     let model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     let result;
@@ -72,23 +74,28 @@ Keep the language clear, compassionate, and informative. Focus on what the quadr
     let text;
     
     try {
+      console.log('Generating content with gemini-2.5-flash...');
       result = await model.generateContent(prompt);
       response = await result.response;
       text = response.text();
+      console.log('Successfully generated analysis:', text);
     } catch (error: unknown) {
       // If rate limited (429) or model not found (404), try gemini-1.5-flash as fallback
       const errorMessage = error instanceof Error ? error.message : String(error);
+      console.log('Error with gemini-2.5-flash:', errorMessage);
       if (errorMessage.includes('429') || errorMessage.includes('404')) {
         console.log('Rate limited or model unavailable, trying gemini-1.5-flash...');
         model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
         result = await model.generateContent(prompt);
         response = await result.response;
         text = response.text();
+        console.log('Successfully generated analysis with fallback:', text);
       } else {
         throw error;
       }
     }
 
+    console.log('Returning analysis response');
     return NextResponse.json({
       success: true,
       analysis: text,
